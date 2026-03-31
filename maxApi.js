@@ -87,6 +87,12 @@ export const maxApi = {
     return data;
   },
 
+  // === Chats ===
+  async getChat(chatId) {
+    const { data } = await client.get(`/chats/${chatId}`);
+    return data;
+  },
+
   // === Uploads ===
   async getUploadUrl(type = 'video') {
     const { data } = await client.post('/uploads', null, {

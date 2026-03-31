@@ -303,7 +303,10 @@ export function adminNotification({
   leadType,
   channelSubscribed,
 }) {
-  const userLink = username ? `@${username}` : `user_id: ${userId}`;
+  const nameDisplay = fullName || 'Без имени';
+  const userLink = username
+    ? `<a href="https://max.ru/u/${username}">@${username}</a>`
+    : (userId ? `user_id: ${userId}` : '<i>не определён</i>');
   const phoneLine = phone
     ? `📱 Телефон: <b>${phone}</b>`
     : '📱 Телефон: <i>не указан</i>';
@@ -312,10 +315,10 @@ export function adminNotification({
     : '🆔 ycid: <i>не передан</i>';
   const subMark = channelSubscribed ? '✅' : '❌';
   return (
-    `🔔 <b>Новая заявка из Auditbot!</b>\n` +
+    `🔔 <b>Новая заявка из MaxBot!</b>\n` +
     `\n` +
-    `👤 ${fullName} (${userLink})\n` +
-    `🆔 <code>${userId}</code>\n` +
+    `👤 ${nameDisplay} (${userLink})\n` +
+    `🆔 Max ID: <code>${userId || '—'}</code>\n` +
     `${ycidLine}\n` +
     `${phoneLine}\n` +
     `\n` +

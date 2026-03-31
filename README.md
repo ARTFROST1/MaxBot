@@ -36,14 +36,17 @@ node index.js
 
 При первом запуске бот загрузит видео в Max через Upload API и закеширует токены в `video_tokens.json`.
 
-## Deep-link (передача client_id из Метрики)
+## Метрика и client_id
 
-В Telegram используется `/start cid_XXXX`. В Max нет payload при `bot_started`.
+В Telegram используется `/start cid_XXXX` для передачи client_id из Метрики. В Max API нет payload при `bot_started` — стартовые параметры не поддерживаются.
 
-**Решение:** лендинг инструктирует пользователя отправить боту первое сообщение `cid_XXXXXX`.
-Бот парсит его в состоянии `greeting` и сохраняет client_id.
+Текущее поведение: бот отправляет конверсии в Метрику на каждый шаг воронки, но `client_id` всегда `null`. Метрика принимает конверсии, но не может привязать их к визиту на сайт. Для полноценной атрибуции потребуется внешний сервис маппинга (см. `MaxDocs/MIGRATION_PLAN.md`, Вариант C).
 
-## Деплой (systemd)
+## Деплой
+
+Подробная инструкция (включая установку Node.js, копирование .env и video_tokens.json): **[DEPLOY.md](DEPLOY.md)**
+
+Краткие команды (если Node.js и зависимости уже установлены):
 
 ```bash
 sudo cp maxbot.service /etc/systemd/system/

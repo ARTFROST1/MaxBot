@@ -228,6 +228,22 @@ async function handleBotStarted(update) {
     full_name: [update.user.first_name, update.user.last_name].filter(Boolean).join(' '),
   });
 
+  // Enrich: fetch full profile via GET /chats/{userId}
+  try {
+    const chatInfo = await maxApi.getChat(userId);
+    const profile = chatInfo?.dialog_with_user;
+    if (profile) {
+      logger.debug({ profile_username: profile.username, profile_name: profile.first_name }, 'Enriched user profile');
+      const enriched = {};
+      if (profile.username) enriched.username = profile.username;
+      const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(' ');
+      if (fullName) enriched.full_name = fullName;
+      if (Object.keys(enriched).length) fsm.updateData(userId, enriched);
+    }
+  } catch (e) {
+    logger.debug({ err: e }, 'Не удалось обогатить профиль пользователя');
+  }
+
   fsm.setState(userId, States.GREETING);
   await sendStep(userId, MSG_GREETING, { videoKey: 'VIDEO_GREETING' });
 
@@ -462,10 +478,17 @@ async function handleMessage(update) {
     return;
   }
 
-  // Телефон: пропустить (текстовый fallback — для случая если кнопка не сработала)
+  // Телефон: текстовый ввод или пропуск
   if (state === States.PHONE_REQUEST) {
-    fsm.updateData(userId, { phone: '' });
-    await maxApi.sendMessage(userId, { text: '✅ Принято' });
+    const digits = text.replace(/\D/g, '');
+    if (digits.length >= 7) {
+      // User typed a phone number manually
+      fsm.updateData(userId, { phone: text.trim() });
+      await maxApi.sendMessage(userId, { text: '✅ Спасибо!' });
+    } else {
+      fsm.updateData(userId, { phone: '' });
+      await maxApi.sendMessage(userId, { text: '✅ Принято' });
+    }
     await finalizeLead(userId);
     return;
   }
@@ -569,7 +592,10 @@ export async function startPolling() {
         // Нормальный таймаут polling — продолжаем
         continue;
       }
-      logger.error({ err: e }, 'Ошибка polling — повтор через 5 сек');
+      const status = e.response?.status;
+      const apiCode = e.response?.data?.code;
+      const apiMsg = e.response?.data?.message;
+      logger.error({ status, apiCode, apiMsg, code: e.code }, 'Ошибка polling — повтор через 5 сек');
       await new Promise((r) => setTimeout(r, 5000));
     }
   }
