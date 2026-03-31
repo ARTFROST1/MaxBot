@@ -1,0 +1,15 @@
+[Unit]
+Description=MaxBot Auditbot — Max Messenger audit funnel bot
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/VDS_scripts/MaxBot
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

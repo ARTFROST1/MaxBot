@@ -1,0 +1,576 @@
+// bot.js — Polling loop, routing, handlers (аналог bot.py)
+import { config } from './config.js';
+import { logger } from './logger.js';
+import { maxApi } from './maxApi.js';
+import { fsm, States } from './fsm.js';
+import * as scheduler from './scheduler.js';
+import { sendConversion } from './metrika.js';
+import { getVideoToken, preloadVideos } from './videoManager.js';
+import {
+  CB_Q1_YES, CB_Q1_NO,
+  CB_Q2_50K_YES, CB_Q2_50K_NO,
+  CB_Q2_100K_YES, CB_Q2_100K_NO,
+  CB_REJECT_APPLY, CB_GOAL_AUDIT,
+  CB_ACCESS_YES, CB_ACCESS_REM_YES, CB_ACCESS_REM_WRITE,
+  CB_PRICE_YES, CB_PRICE_NO,
+  CB_PRICE_REM_PAY, CB_PRICE_REM_WRITE,
+  CB_INDIVIDUAL_WRITE, CB_SUB_CHECK, CB_PHONE_SKIP,
+  KB_QUESTION_1, KB_QUESTION_2_50K, KB_QUESTION_2_100K,
+  KB_REJECT, KB_ACCESS_REQUEST, KB_ACCESS_REMINDER,
+  KB_PRICE_REMINDER, KB_INDIVIDUAL, KB_PHONE_REQUEST,
+  kbPrice, kbChannelLink,
+  MSG_GREETING, MSG_QUESTION_1, MSG_QUESTION_2_50K, MSG_QUESTION_2_100K,
+  MSG_REJECT, MSG_KEY_GOAL, MSG_GOAL_REMINDER, MSG_GOAL_CONFIRMED,
+  MSG_ACCESS_REQUEST, MSG_ACCESS_REMINDER,
+  MSG_PRICE, MSG_PRICE_DISCOUNTED, MSG_PRICE_REMINDER,
+  MSG_INDIVIDUAL, MSG_PHONE_REQUEST,
+  MSG_LEAD_SHORT, MSG_LEAD_REQUISITES, MSG_FINAL_REMINDER,
+  adminNotification,
+} from './messages.js';
+
+// ── Вспомогательная отправка шага ─────────────────────────
+async function sendStep(userId, text, { keyboard = null, videoKey = '' } = {}) {
+  // Typing action (аналог bot.send_chat_action в Python)
+  try {
+    await maxApi.sendAction(userId, 'typing_on');
+  } catch { /* ignore */ }
+
+  // Отправляем видео перед текстом, если указано (как в Python _send_step)
+  if (videoKey) {
+    try {
+      const token = await getVideoToken(videoKey);
+      if (token) {
+        await maxApi.sendMessage(userId, {
+          attachments: [{ type: 'video', payload: { token } }],
+        });
+      }
+    } catch (e) {
+      logger.warn({ err: e }, `Не удалось отправить видео ${videoKey}`);
+    }
+  }
+
+  const body = { text, format: 'html' };
+  if (keyboard) {
+    body.attachments = [keyboard];
+  }
+  return maxApi.sendMessage(userId, body);
+}
+
+async function removeButtons(messageId) {
+  try {
+    await maxApi.editMessage(messageId, { attachments: [] });
+  } catch {
+    // Сообщение уже отредактировано или удалено
+  }
+}
+
+// ── Обработчики напоминаний ──────────────────────────────
+
+async function hdlGoalReminder(userId) {
+  if (fsm.getState(userId) === States.KEY_GOAL) {
+    await sendStep(userId, MSG_GOAL_REMINDER, { videoKey: 'VIDEO_GOAL_REMINDER' });
+    fsm.setState(userId, States.GOAL_REMINDER);
+    const data = fsm.getData(userId);
+    sendConversion(data.client_id, config.GOAL_NO_TARGET, userId).catch(() => {});
+    scheduler.schedule(userId, 'goal_final', config.FINAL_REMINDER_TIMEOUT, States.GOAL_REMINDER);
+  }
+}
+
+async function hdlGoalFinal(userId) {
+  if (fsm.getState(userId) === States.GOAL_REMINDER) {
+    await sendStep(userId, MSG_FINAL_REMINDER);
+    fsm.setState(userId, States.FINISHED);
+    const data = fsm.getData(userId);
+    sendConversion(data.client_id, config.GOAL_NO_REACTION, userId).catch(() => {});
+  }
+}
+
+async function hdlAccessReminder(userId) {
+  if (fsm.getState(userId) === States.ACCESS_REQUEST) {
+    await sendStep(userId, MSG_ACCESS_REMINDER, {
+      keyboard: KB_ACCESS_REMINDER,
+      videoKey: 'VIDEO_ABOUT_ME',
+    });
+    fsm.setState(userId, States.ACCESS_REMINDER);
+    const data = fsm.getData(userId);
+    sendConversion(data.client_id, config.GOAL_NO_ACCESS, userId).catch(() => {});
+    scheduler.schedule(userId, 'access_final', config.FINAL_REMINDER_TIMEOUT, States.ACCESS_REMINDER);
+  }
+}
+
+async function hdlAccessFinal(userId) {
+  if (fsm.getState(userId) === States.ACCESS_REMINDER) {
+    await sendStep(userId, MSG_FINAL_REMINDER);
+    fsm.setState(userId, States.FINISHED);
+    const data = fsm.getData(userId);
+    sendConversion(data.client_id, config.GOAL_NO_REACTION, userId).catch(() => {});
+  }
+}
+
+async function hdlPriceReminder(userId) {
+  if (fsm.getState(userId) === States.PRICE) {
+    await sendStep(userId, MSG_PRICE_REMINDER, {
+      keyboard: KB_PRICE_REMINDER,
+      videoKey: 'VIDEO_PRICE_REMINDER',
+    });
+    fsm.setState(userId, States.PRICE_REMINDER);
+    const data = fsm.getData(userId);
+    sendConversion(data.client_id, config.GOAL_HIGH_PRICE, userId).catch(() => {});
+    scheduler.schedule(userId, 'price_final', config.FINAL_REMINDER_TIMEOUT, States.PRICE_REMINDER);
+  }
+}
+
+async function hdlPriceFinal(userId) {
+  if (fsm.getState(userId) === States.PRICE_REMINDER) {
+    await sendStep(userId, MSG_FINAL_REMINDER);
+    fsm.setState(userId, States.FINISHED);
+    const data = fsm.getData(userId);
+    sendConversion(data.client_id, config.GOAL_NO_REACTION, userId).catch(() => {});
+  }
+}
+
+// ── Хелперы воронки ──────────────────────────────────────
+
+async function sendAccessRequest(userId) {
+  await sendStep(userId, MSG_GOAL_CONFIRMED);
+  await sendStep(userId, MSG_ACCESS_REQUEST, {
+    keyboard: KB_ACCESS_REQUEST,
+    videoKey: 'VIDEO_ACCESS_INSTRUCTION',
+  });
+  fsm.setState(userId, States.ACCESS_REQUEST);
+  const data = fsm.getData(userId);
+  sendConversion(data.client_id, config.GOAL_ACCESS, userId).catch(() => {});
+  scheduler.schedule(userId, 'access_reminder', config.ACCESS_REMINDER_TIMEOUT, States.ACCESS_REQUEST);
+}
+
+async function sendPrice(userId) {
+  const data = fsm.getData(userId);
+  const text = data.channel_subscribed ? MSG_PRICE_DISCOUNTED : MSG_PRICE;
+  await sendStep(userId, text, { keyboard: kbPrice(), videoKey: 'VIDEO_WHY_PAID' });
+  fsm.setState(userId, States.PRICE);
+  sendConversion(data.client_id, config.GOAL_PRICE, userId).catch(() => {});
+  scheduler.schedule(userId, 'price_reminder', config.PRICE_REMINDER_TIMEOUT, States.PRICE);
+}
+
+async function requestPhone(userId, leadType) {
+  fsm.updateData(userId, { pending_lead_type: leadType });
+  await sendStep(userId, MSG_PHONE_REQUEST, { keyboard: KB_PHONE_REQUEST });
+  fsm.setState(userId, States.PHONE_REQUEST);
+}
+
+async function finalizeLead(userId) {
+  const data = fsm.getData(userId);
+  const leadTypeKey = data.pending_lead_type || 'short';
+  const msg = leadTypeKey === 'requisites' ? MSG_LEAD_REQUISITES : MSG_LEAD_SHORT;
+  const leadTypeLabel = leadTypeKey === 'requisites' ? 'Готов оплатить' : 'Запрос связи';
+
+  await maxApi.sendMessage(userId, {
+    text: msg,
+    format: 'html',
+    attachments: [kbChannelLink()],
+  });
+  fsm.setState(userId, States.FINISHED);
+
+  // Метрика: специфичная цель
+  const phone = data.phone || '';
+  let specificGoal;
+  if (leadTypeKey === 'requisites') {
+    specificGoal = phone ? config.GOAL_ORDER_PRICE_WITH_PHONE : config.GOAL_ORDER_PRICE_NO_PHONE;
+  } else {
+    specificGoal = phone ? config.GOAL_ORDER_WITH_PHONE : config.GOAL_ORDER_NO_PHONE;
+  }
+  sendConversion(data.client_id, specificGoal, userId).catch(() => {});
+
+  // Уведомление админу
+  await notifyAdmin(data, leadTypeLabel);
+}
+
+async function notifyAdmin(data, leadType) {
+  if (!config.ADMIN_CHAT_ID) {
+    logger.debug('ADMIN_CHAT_ID не задан — уведомление не отправлено');
+    return;
+  }
+  const text = adminNotification({
+    username: data.username || '',
+    fullName: data.full_name || '',
+    userId: data.max_user_id || '',
+    ycid: data.client_id || '',
+    adWorked: data.ad_worked || '—',
+    budgetOk: data.budget_ok || '—',
+    keyGoal: data.key_goal || '—',
+    phone: data.phone || '',
+    leadType,
+    channelSubscribed: !!data.channel_subscribed,
+  });
+  try {
+    await maxApi.sendChatMessage(Number(config.ADMIN_CHAT_ID), { text, format: 'html' });
+  } catch (e) {
+    logger.error({ err: e }, 'Не удалось уведомить админа');
+  }
+}
+
+// ── Обработка bot_started ────────────────────────────────
+
+async function handleBotStarted(update) {
+  const userId = update.user?.user_id;
+  if (!userId) return;
+
+  // DEBUG: выводим user_id при /start (chat_id = user_id для личных чатов)
+  logger.info({ user_id: userId, chat_id: update.chat_id || userId }, '🔑 DEBUG bot_started: ID пользователя (удалить после настройки)');
+
+  scheduler.cancel(userId);
+  fsm.clear(userId);
+
+  fsm.updateData(userId, {
+    client_id: null,
+    max_user_id: userId,
+    username: update.user.username || '',
+    full_name: [update.user.first_name, update.user.last_name].filter(Boolean).join(' '),
+  });
+
+  fsm.setState(userId, States.GREETING);
+  await sendStep(userId, MSG_GREETING, { videoKey: 'VIDEO_GREETING' });
+
+  sendConversion(null, config.GOAL_BOT_STARTED, userId).catch(() => {});
+
+  // Таймаут 5 сек → автоматически отправляем Вопрос 1
+  setTimeout(async () => {
+    try {
+      if (fsm.getState(userId) === States.GREETING) {
+        await sendStep(userId, MSG_QUESTION_1, { keyboard: KB_QUESTION_1 });
+        fsm.setState(userId, States.QUESTION_1);
+        const data = fsm.getData(userId);
+        sendConversion(data.client_id, config.GOAL_STEP1, userId).catch(() => {});
+      }
+    } catch (e) {
+      logger.error({ err: e }, 'Ошибка отправки Вопрос 1 после greeting delay');
+    }
+  }, config.GREETING_DELAY * 1000);
+}
+
+// ── Обработка callback (нажатие inline-кнопки) ───────────
+
+async function handleCallback(update) {
+  const cb = update.callback;
+  if (!cb) return;
+
+  const userId = cb.user?.user_id;
+  const callbackId = cb.callback_id;
+  const payload = cb.payload;
+  const messageId = update.message?.body?.mid;
+
+  if (!userId || !payload) return;
+
+  // Ответить на callback (убрать "загрузку")
+  await maxApi.answerCallback(callbackId).catch(() => {});
+
+  switch (payload) {
+    // ── Вопрос 1 ──
+    case CB_Q1_YES: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      fsm.updateData(userId, { ad_worked: 'Да' });
+      await sendStep(userId, MSG_QUESTION_2_50K, { keyboard: KB_QUESTION_2_50K });
+      fsm.setState(userId, States.QUESTION_2_50K);
+      const data = fsm.getData(userId);
+      sendConversion(data.client_id, config.GOAL_STEP2, userId).catch(() => {});
+      break;
+    }
+    case CB_Q1_NO: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      fsm.updateData(userId, { ad_worked: 'Нет' });
+      await sendStep(userId, MSG_QUESTION_2_100K, { keyboard: KB_QUESTION_2_100K });
+      fsm.setState(userId, States.QUESTION_2_100K);
+      const data = fsm.getData(userId);
+      sendConversion(data.client_id, config.GOAL_STEP2, userId).catch(() => {});
+      break;
+    }
+
+    // ── Вопрос 2: Бюджет достаточный ──
+    case CB_Q2_50K_YES:
+    case CB_Q2_100K_YES: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      fsm.updateData(userId, { budget_ok: 'Да' });
+      await sendStep(userId, MSG_KEY_GOAL, { videoKey: 'VIDEO_KEY_GOAL' });
+      fsm.setState(userId, States.KEY_GOAL);
+      const data = fsm.getData(userId);
+      sendConversion(data.client_id, config.GOAL_STEP3, userId).catch(() => {});
+      scheduler.schedule(userId, 'goal_reminder', config.GOAL_REMINDER_TIMEOUT, States.KEY_GOAL);
+      break;
+    }
+
+    // ── Вопрос 2: Бюджет недостаточный ──
+    case CB_Q2_50K_NO:
+    case CB_Q2_100K_NO: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      fsm.updateData(userId, { budget_ok: 'Нет' });
+      await sendStep(userId, MSG_REJECT, { keyboard: KB_REJECT, videoKey: 'VIDEO_ABOUT_ME' });
+      fsm.setState(userId, States.REJECT);
+      const data = fsm.getData(userId);
+      sendConversion(data.client_id, config.GOAL_NOT_ENOUGH, userId).catch(() => {});
+      break;
+    }
+
+    // ── Отказ → Оставить заявку ──
+    case CB_REJECT_APPLY: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      await requestPhone(userId, 'short');
+      break;
+    }
+
+    // ── Напоминание о цели → перейти к аудиту ──
+    case CB_GOAL_AUDIT: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      await sendStep(userId, MSG_GOAL_REMINDER);
+      fsm.setState(userId, States.GOAL_REMINDER);
+      scheduler.schedule(userId, 'goal_final', config.FINAL_REMINDER_TIMEOUT, States.GOAL_REMINDER);
+      break;
+    }
+
+    // ── Доступ: согласие ──
+    case CB_ACCESS_YES:
+    case CB_ACCESS_REM_YES: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      await sendPrice(userId);
+      break;
+    }
+
+    // ── Доступ: напишите мне ──
+    case CB_ACCESS_REM_WRITE: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      await requestPhone(userId, 'short');
+      break;
+    }
+
+    // ── Проверка подписки ──
+    case CB_SUB_CHECK: {
+      if (!config.MAX_CHANNEL_ID) {
+        await maxApi.answerCallbackNotification(callbackId, 'Не настроен канал для проверки подписки.').catch(() => {});
+        break;
+      }
+      try {
+        const result = await maxApi.getMembers(Number(config.MAX_CHANNEL_ID), [userId]);
+        const isMember = result.members && result.members.length > 0;
+        if (isMember) {
+          fsm.updateData(userId, { channel_subscribed: true });
+          await maxApi.answerCallbackNotification(callbackId, 'Подписка подтверждена — цена со скидкой 8 000 ₽.').catch(() => {});
+          const data = fsm.getData(userId);
+          sendConversion(data.client_id, config.GOAL_SUB, userId).catch(() => {});
+          // Обновить сообщение со скидкой
+          if (messageId) {
+            try {
+              await maxApi.editMessage(messageId, {
+                text: MSG_PRICE_DISCOUNTED,
+                format: 'html',
+                attachments: [kbPrice()],
+              });
+            } catch { /* ignore */ }
+          }
+        } else {
+          await maxApi.answerCallbackNotification(callbackId, 'Подписку не вижу. Подпишитесь на канал и нажмите «Проверить подписку».').catch(() => {});
+        }
+      } catch (e) {
+        logger.warn({ err: e }, 'Не удалось проверить подписку');
+        await maxApi.answerCallbackNotification(callbackId, 'Ошибка проверки подписки. Попробуйте позже.').catch(() => {});
+      }
+      break;
+    }
+
+    // ── Цена: да, по счёту ──
+    case CB_PRICE_YES:
+    case CB_PRICE_REM_PAY: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      await requestPhone(userId, 'requisites');
+      break;
+    }
+
+    // ── Цена: другой способ ──
+    case CB_PRICE_NO: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      await sendStep(userId, MSG_INDIVIDUAL, { keyboard: KB_INDIVIDUAL });
+      fsm.setState(userId, States.INDIVIDUAL);
+      const data = fsm.getData(userId);
+      sendConversion(data.client_id, config.GOAL_ANOTHER_BILL, userId).catch(() => {});
+      break;
+    }
+
+    // ── Напоминание о цене / индивидуальный: напишите мне ──
+    case CB_PRICE_REM_WRITE:
+    case CB_INDIVIDUAL_WRITE: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      await requestPhone(userId, 'short');
+      break;
+    }
+
+    // ── Телефон: пропустить ──
+    case CB_PHONE_SKIP: {
+      if (messageId) await removeButtons(messageId);
+      fsm.updateData(userId, { phone: '' });
+      await maxApi.sendMessage(userId, { text: '✅ Принято' });
+      await finalizeLead(userId);
+      break;
+    }
+
+    default:
+      logger.debug(`Неизвестный callback payload: ${payload}`);
+  }
+}
+
+// ── Обработка текстового сообщения ───────────────────────
+
+async function handleMessage(update) {
+  const msg = update.message;
+  if (!msg) return;
+
+  const userId = msg.sender?.user_id;
+  if (!userId || msg.sender?.is_bot) return;
+
+  // DEBUG: выводим user_id и chat_id для настройки .env
+  logger.info({ user_id: userId, chat_id: msg.recipient?.chat_id }, '🔑 DEBUG: ID пользователя и чата (удалить после настройки)');
+
+  const text = msg.body?.text || '';
+  const attachments = msg.body?.attachments || [];
+  const state = fsm.getState(userId);
+
+  // Проверяем наличие контакта (request_contact response)
+  const contactAttach = attachments.find((a) => a.type === 'contact');
+  if (contactAttach && state === States.PHONE_REQUEST) {
+    const phone = contactAttach.payload?.vcf_phone
+      || contactAttach.payload?.tam_info?.phone_number
+      || '';
+    fsm.updateData(userId, { phone });
+    await maxApi.sendMessage(userId, { text: '✅ Спасибо!' });
+    await finalizeLead(userId);
+    return;
+  }
+
+  // Ключевая цель — текстовый ответ
+  if (state === States.KEY_GOAL || state === States.GOAL_REMINDER) {
+    scheduler.cancel(userId);
+    fsm.updateData(userId, { key_goal: text.trim() });
+    await sendAccessRequest(userId);
+    return;
+  }
+
+  // Телефон: пропустить (текстовый fallback — для случая если кнопка не сработала)
+  if (state === States.PHONE_REQUEST) {
+    fsm.updateData(userId, { phone: '' });
+    await maxApi.sendMessage(userId, { text: '✅ Принято' });
+    await finalizeLead(userId);
+    return;
+  }
+
+  // Admin debug: получить видео/файл токен
+  if (config.ADMIN_USER_ID && String(userId) === config.ADMIN_USER_ID) {
+    const videoAttach = attachments.find((a) => a.type === 'video');
+    if (videoAttach) {
+      const token = videoAttach.payload?.token || 'N/A';
+      await maxApi.sendMessage(userId, {
+        text: `Video token:\n${token}\n\nМожно вставить в video_tokens.json`,
+      });
+      return;
+    }
+    const fileAttach = attachments.find((a) => a.type === 'file');
+    if (fileAttach) {
+      const token = fileAttach.payload?.token || 'N/A';
+      await maxApi.sendMessage(userId, {
+        text: `File token:\n${token}\n\nТип: ${fileAttach.payload?.filename || 'unknown'}`,
+      });
+      return;
+    }
+  }
+
+  // Фолбэк
+  if (!state || state === States.FINISHED) {
+    await maxApi.sendMessage(userId, {
+      text: '👋 Нажмите кнопку «Начать» в меню бота, чтобы начать!',
+      format: 'html',
+    });
+  } else {
+    await maxApi.sendMessage(userId, {
+      text: '☝️ Пожалуйста, воспользуйтесь кнопками выше.',
+      format: 'html',
+    });
+  }
+}
+
+// ── Polling loop ─────────────────────────────────────────
+
+export async function startPolling() {
+  // Регистрация обработчиков напоминаний
+  scheduler.registerHandler('goal_reminder', hdlGoalReminder);
+  scheduler.registerHandler('goal_final', hdlGoalFinal);
+  scheduler.registerHandler('access_reminder', hdlAccessReminder);
+  scheduler.registerHandler('access_final', hdlAccessFinal);
+  scheduler.registerHandler('price_reminder', hdlPriceReminder);
+  scheduler.registerHandler('price_final', hdlPriceFinal);
+
+  // Восстановление напоминаний из reminders.json
+  await scheduler.restoreOnStartup();
+
+  // Предзагрузка видео
+  try {
+    await preloadVideos();
+  } catch (e) {
+    logger.warn({ err: e }, 'Ошибка предзагрузки видео — продолжаем без видео');
+  }
+
+  // Проверка токена
+  try {
+    const me = await maxApi.getMe();
+    logger.info({ botId: me.user_id, name: me.first_name }, '🚀 MaxBot Auditbot запущен');
+  } catch (e) {
+    logger.error({ err: e }, 'Не удалось получить информацию о боте. Проверьте MAX_BOT_TOKEN.');
+    process.exit(1);
+  }
+
+  let marker = null;
+  const updateTypes = ['bot_started', 'message_created', 'message_callback'];
+
+  while (true) {
+    try {
+      const response = await maxApi.getUpdates(marker, 30, updateTypes);
+      const updates = response.updates || [];
+      if (response.marker != null) {
+        marker = response.marker;
+      }
+
+      for (const update of updates) {
+        try {
+          switch (update.update_type) {
+            case 'bot_started':
+              await handleBotStarted(update);
+              break;
+            case 'message_callback':
+              await handleCallback(update);
+              break;
+            case 'message_created':
+              await handleMessage(update);
+              break;
+            default:
+              logger.debug(`Неизвестный update_type: ${update.update_type}`);
+          }
+        } catch (e) {
+          logger.error({ err: e, update_type: update.update_type }, 'Ошибка обработки update');
+        }
+      }
+    } catch (e) {
+      if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT') {
+        // Нормальный таймаут polling — продолжаем
+        continue;
+      }
+      logger.error({ err: e }, 'Ошибка polling — повтор через 5 сек');
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
+}

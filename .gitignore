@@ -1,0 +1,5 @@
+node_modules/
+.env
+reminders.json
+video_tokens.json
+*.log
