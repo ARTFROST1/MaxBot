@@ -215,9 +215,6 @@ async function handleBotStarted(update) {
   const userId = update.user?.user_id;
   if (!userId) return;
 
-  // DEBUG: выводим user_id при /start (chat_id = user_id для личных чатов)
-  logger.info({ user_id: userId, chat_id: update.chat_id || userId }, '🔑 DEBUG bot_started: ID пользователя (удалить после настройки)');
-
   scheduler.cancel(userId);
   fsm.clear(userId);
 
@@ -451,9 +448,6 @@ async function handleMessage(update) {
   const userId = msg.sender?.user_id;
   if (!userId || msg.sender?.is_bot) return;
 
-  // DEBUG: выводим user_id и chat_id для настройки .env
-  logger.info({ user_id: userId, chat_id: msg.recipient?.chat_id }, '🔑 DEBUG: ID пользователя и чата (удалить после настройки)');
-
   const text = msg.body?.text || '';
   const attachments = msg.body?.attachments || [];
   const state = fsm.getState(userId);
@@ -461,26 +455,27 @@ async function handleMessage(update) {
   // Проверяем наличие контакта (request_contact response)
   const contactAttach = attachments.find((a) => a.type === 'contact');
   if (contactAttach && state === States.PHONE_REQUEST) {
-    // Log raw attachment to discover the real payload structure
-    logger.info({ contactAttach: JSON.stringify(contactAttach) }, 'DEBUG: raw contact attachment');
+    logger.debug({ contactAttach: JSON.stringify(contactAttach) }, 'raw contact attachment');
 
     const p = contactAttach.payload || contactAttach;
-    // Try every plausible field path — API payload format is undocumented
-    let phone = p.vcf_phone
-      || p.phone
-      || p.phone_number
-      || p.tam_info?.phone_number
-      || p.tam_info?.phone
-      || p.vcf_info?.phone
-      || p.contact?.phone_number
-      || p.contact?.phone
-      || '';
 
-    // Try to extract from VCF string if present (TEL:+79001234567)
-    if (!phone && typeof p.vcf_info === 'string') {
+    // 1) Extract from VCF string (confirmed working format: vcf_info contains TEL;TYPE=cell:79189240007)
+    let phone = '';
+    if (typeof p.vcf_info === 'string') {
       const telMatch = p.vcf_info.match(/TEL[^:]*:([+\d\s()-]+)/i);
       if (telMatch) phone = telMatch[1].trim();
     }
+
+    // 2) Fallback: direct field paths
+    if (!phone) {
+      phone = p.phone || p.phone_number || p.vcf_phone
+        || p.max_info?.phone || p.max_info?.phone_number
+        || p.tam_info?.phone_number || p.tam_info?.phone
+        || p.contact?.phone_number || p.contact?.phone
+        || '';
+    }
+
+    // 3) Fallback: try other VCF-like string fields
     if (!phone && typeof p.vcf === 'string') {
       const telMatch = p.vcf.match(/TEL[^:]*:([+\d\s()-]+)/i);
       if (telMatch) phone = telMatch[1].trim();
