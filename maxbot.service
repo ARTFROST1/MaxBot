@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=www-data
-WorkingDirectory=/opt/VDS_scripts/MaxBot
+User=direct
+WorkingDirectory=/home/direct/MaxBot
 ExecStart=/usr/bin/node index.js
 Restart=always
 RestartSec=5
