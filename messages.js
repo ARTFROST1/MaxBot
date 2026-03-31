@@ -306,7 +306,7 @@ export function adminNotification({
   const nameDisplay = fullName || 'Без имени';
   const userLink = username
     ? `<a href="https://max.ru/u/${username}">@${username}</a>`
-    : (userId ? `user_id: ${userId}` : '<i>не определён</i>');
+    : (userId ? `<a href="https://max.ru/u/${userId}">user_id: ${userId}</a>` : '<i>не определён</i>');
   const phoneLine = phone
     ? `📱 Телефон: <b>${phone}</b>`
     : '📱 Телефон: <i>не указан</i>';

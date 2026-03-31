@@ -461,12 +461,51 @@ async function handleMessage(update) {
   // Проверяем наличие контакта (request_contact response)
   const contactAttach = attachments.find((a) => a.type === 'contact');
   if (contactAttach && state === States.PHONE_REQUEST) {
-    const phone = contactAttach.payload?.vcf_phone
-      || contactAttach.payload?.tam_info?.phone_number
+    // Log raw attachment to discover the real payload structure
+    logger.info({ contactAttach: JSON.stringify(contactAttach) }, 'DEBUG: raw contact attachment');
+
+    const p = contactAttach.payload || contactAttach;
+    // Try every plausible field path — API payload format is undocumented
+    let phone = p.vcf_phone
+      || p.phone
+      || p.phone_number
+      || p.tam_info?.phone_number
+      || p.tam_info?.phone
+      || p.vcf_info?.phone
+      || p.contact?.phone_number
+      || p.contact?.phone
       || '';
-    fsm.updateData(userId, { phone });
-    await maxApi.sendMessage(userId, { text: '✅ Спасибо!' });
-    await finalizeLead(userId);
+
+    // Try to extract from VCF string if present (TEL:+79001234567)
+    if (!phone && typeof p.vcf_info === 'string') {
+      const telMatch = p.vcf_info.match(/TEL[^:]*:([+\d\s()-]+)/i);
+      if (telMatch) phone = telMatch[1].trim();
+    }
+    if (!phone && typeof p.vcf === 'string') {
+      const telMatch = p.vcf.match(/TEL[^:]*:([+\d\s()-]+)/i);
+      if (telMatch) phone = telMatch[1].trim();
+    }
+    if (!phone && typeof p.data === 'string') {
+      const telMatch = p.data.match(/TEL[^:]*:([+\d\s()-]+)/i);
+      if (telMatch) phone = telMatch[1].trim();
+    }
+
+    if (phone) {
+      fsm.updateData(userId, { phone });
+      await maxApi.sendMessage(userId, { text: '✅ Спасибо! Номер сохранён.' });
+      await finalizeLead(userId);
+    } else {
+      // Contact shared but phone extraction failed — ask to type manually
+      fsm.updateData(userId, { phone: '' });
+      await maxApi.sendMessage(userId, {
+        text: 'Спасибо! К сожалению, не удалось считать номер автоматически.\n\n' +
+              '📱 Напишите, пожалуйста, ваш номер телефона вручную (например, +7 900 123 45 67), ' +
+              'или нажмите «Пропустить».',
+        format: 'html',
+      });
+      // Stay in PHONE_REQUEST state — don't finalize yet!
+      // User can type their phone or press Skip
+    }
     return;
   }
 
