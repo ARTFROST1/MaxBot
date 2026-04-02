@@ -36,11 +36,26 @@ node index.js
 
 При первом запуске бот загрузит видео в Max через Upload API и закеширует токены в `video_tokens.json`.
 
-## Метрика и client_id
+## Метрика и client_id (deep link)
 
-В Telegram используется `/start cid_XXXX` для передачи client_id из Метрики. В Max API нет payload при `bot_started` — стартовые параметры не поддерживаются.
+Max API поддерживает deep links для ботов аналогично Telegram:
 
-Текущее поведение: бот отправляет конверсии в Метрику на каждый шаг воронки, но `client_id` всегда `null`. Метрика принимает конверсии, но не может привязать их к визиту на сайт. Для полноценной атрибуции потребуется внешний сервис маппинга (см. `MaxDocs/MIGRATION_PLAN.md`, Вариант C).
+```
+https://max.ru/<botName>?start=cid_XXXXXXXX
+```
+
+При переходе по ссылке бот получает `bot_started` с полем `payload: "cid_XXXXXXXX"`. Бот парсит client_id и передаёт его во все конверсии Яндекс.Метрики — идентично работе Auditbot в Telegram.
+
+**На лендинге** JS-код должен строить ссылку с client_id из Яндекс.Метрики:
+
+```javascript
+ym(COUNTER_ID, 'getClientID', function(clientId) {
+  document.getElementById('max-btn').href = 
+    'https://max.ru/ВАШ_БОТ?start=cid_' + clientId;
+});
+```
+
+Ограничения payload: до **128 символов**, допустимые символы: буквы, цифры, `_`, `-`.
 
 ## Деплой
 

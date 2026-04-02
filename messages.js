@@ -21,6 +21,8 @@ export const CB_PRICE_REM_PAY = 'price_rem:pay';
 export const CB_PRICE_REM_WRITE = 'price_rem:write';
 export const CB_INDIVIDUAL_WRITE = 'individual:write';
 export const CB_SUB_CHECK = 'sub:check';
+export const CB_SUB_READY = 'sub:ready';
+export const CB_PRICE_CONTINUE = 'price:continue';
 export const CB_PHONE_SKIP = 'phone:skip';
 
 // ============================================================
@@ -69,11 +71,34 @@ export const KB_ACCESS_REMINDER = kb([
   [cbBtn('✍️ Напишите мне', CB_ACCESS_REM_WRITE)],
 ]);
 
+// Напоминание о бесплатном аудите при оплате
+export const MSG_PRICE_SUB_REMINDER =
+  `💡 <b>Кстати!</b>\n` +
+  `\n` +
+  `При подписке на наш канал аудит становится <b>бесплатным</b>.\n` +
+  `\n` +
+  `Подпишитесь и нажмите «Проверить подписку» — ` +
+  `и аудит будет бесплатным!`;
+
+export function kbPriceSubReminder() {
+  return kb([
+    [linkBtn('📢 Подписаться на канал', config.MAX_CHANNEL_LINK || 'https://max.ru')],
+    [cbBtn('🔍 Проверить подписку', CB_SUB_CHECK)],
+    [cbBtn('💳 Продолжить оплату (5 000 ₽)', CB_PRICE_CONTINUE)],
+  ]);
+}
+
 export function kbPrice() {
   return kb([
     [linkBtn('📢 Подписаться на канал', config.MAX_CHANNEL_LINK || 'https://max.ru')],
     [cbBtn('🔍 Проверить подписку', CB_SUB_CHECK)],
     [cbBtn('✅ Да, по счёту', CB_PRICE_YES), cbBtn('💬 Другой способ', CB_PRICE_NO)],
+  ]);
+}
+
+export function kbPriceSubscribed() {
+  return kb([
+    [cbBtn('✅ Я подписался. Готов к аудиту', CB_SUB_READY)],
   ]);
 }
 
@@ -147,6 +172,14 @@ export const MSG_REJECT =
 export const MSG_KEY_GOAL =
   `🔑 <b>Отлично! Переходим к делу.</b>\n` +
   `\n` +
+  `Мы будем рассматривать аккаунт на 3х уровнях:\n` +
+  `— технический;\n` +
+  `— логический;\n` +
+  `— стратегический.\n` +
+  `\n` +
+  `И чтобы мы корректно оценили существующие настройки, ` +
+  `нам надо понимать одну вещь.\n` +
+  `\n` +
   `Какая ключевая цель вашего рекламного аккаунта сейчас?\n` +
   `\n` +
   `<i>Напишите текстом — например: «Увеличить количество заявок», ` +
@@ -196,8 +229,8 @@ export const MSG_ACCESS_REMINDER =
 export const MSG_PRICE =
   `💼 <b>Условия аудита</b>\n` +
   `\n` +
-  `💰 Стоимость: <b>10 000 ₽</b>\n` +
-  `🎁 При подписке на наш канал: <b>8 000 ₽</b>\n` +
+  `💰 Стоимость: <b>5 000 ₽</b>\n` +
+  `🎁 При подписке на наш канал: <b>БЕСПЛАТНО</b>\n` +
   `⏱ Срок выполнения: <b>2–3 дня</b>\n` +
   `\n` +
   `Посмотрите видео — в нём мы объясняем, почему аудит платный ` +
@@ -209,14 +242,11 @@ export const MSG_PRICE =
 export const MSG_PRICE_DISCOUNTED =
   `💼 <b>Условия аудита</b>\n` +
   `\n` +
-  `💰 Стоимость: <s>10 000 ₽</s> <b>8 000 ₽</b>\n` +
-  `✅ Скидка за подписку применена.\n` +
+  `💰 Стоимость: <s>5 000 ₽</s> <b>БЕСПЛАТНО</b>\n` +
+  `✅ Подписка на канал подтверждена.\n` +
   `⏱ Срок выполнения: <b>2–3 дня</b>\n` +
   `\n` +
-  `Посмотрите видео — в нём мы объясняем, почему аудит платный ` +
-  `и что вы получите.\n` +
-  `\n` +
-  `Вам будет удобно оплатить через <b>расчётный счёт</b>?`;
+  `Нажмите кнопку ниже, чтобы оставить заявку.`;
 
 // Сообщение 11 — Напоминание 3 (тг-споилер удалён)
 export const MSG_PRICE_REMINDER =
@@ -269,6 +299,19 @@ export const MSG_LEAD_REQUISITES =
   `А пока подписывайтесь на канал — ` +
   `там много полезного про Директ:\n` +
   `👇 Нажмите кнопку ниже`;
+
+// Сообщение — Заявка от подписчика (бесплатный аудит)
+export const MSG_LEAD_SUBSCRIBED =
+  `🎉 <b>Заявка уже у нас!</b>\n` +
+  `\n` +
+  `Скоро вам напишем.\n` +
+  `\n` +
+  `А пока — вот самые интересные материалы:\n` +
+  `\n` +
+  `1. <a href="https://t.me/kirill_i_ta/66">Самая большая ошибка в Яндекс Директе</a>\n` +
+  `2. <a href="https://t.me/kirill_i_ta/56">Одна простая истина</a>\n` +
+  `3. <a href="https://t.me/kirill_i_ta/78">Не забывайте про продажи</a>\n` +
+  `4. <a href="https://t.me/kirill_i_ta/76">Что обо мне стоит знать</a>`;
 
 // Сообщение 15 — Финальное напоминание
 export const MSG_FINAL_REMINDER =

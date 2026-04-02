@@ -14,17 +14,17 @@ import {
   CB_ACCESS_YES, CB_ACCESS_REM_YES, CB_ACCESS_REM_WRITE,
   CB_PRICE_YES, CB_PRICE_NO,
   CB_PRICE_REM_PAY, CB_PRICE_REM_WRITE,
-  CB_INDIVIDUAL_WRITE, CB_SUB_CHECK, CB_PHONE_SKIP,
+  CB_INDIVIDUAL_WRITE, CB_SUB_CHECK, CB_SUB_READY, CB_PRICE_CONTINUE, CB_PHONE_SKIP,
   KB_QUESTION_1, KB_QUESTION_2_50K, KB_QUESTION_2_100K,
   KB_REJECT, KB_ACCESS_REQUEST, KB_ACCESS_REMINDER,
   KB_PRICE_REMINDER, KB_INDIVIDUAL, KB_PHONE_REQUEST,
-  kbPrice, kbChannelLink,
+  kbPrice, kbPriceSubscribed, kbPriceSubReminder, kbChannelLink,
   MSG_GREETING, MSG_QUESTION_1, MSG_QUESTION_2_50K, MSG_QUESTION_2_100K,
   MSG_REJECT, MSG_KEY_GOAL, MSG_GOAL_REMINDER, MSG_GOAL_CONFIRMED,
   MSG_ACCESS_REQUEST, MSG_ACCESS_REMINDER,
-  MSG_PRICE, MSG_PRICE_DISCOUNTED, MSG_PRICE_REMINDER,
+  MSG_PRICE, MSG_PRICE_DISCOUNTED, MSG_PRICE_SUB_REMINDER, MSG_PRICE_REMINDER,
   MSG_INDIVIDUAL, MSG_PHONE_REQUEST,
-  MSG_LEAD_SHORT, MSG_LEAD_REQUISITES, MSG_FINAL_REMINDER,
+  MSG_LEAD_SHORT, MSG_LEAD_REQUISITES, MSG_LEAD_SUBSCRIBED, MSG_FINAL_REMINDER,
   adminNotification,
 } from './messages.js';
 
@@ -145,8 +145,10 @@ async function sendAccessRequest(userId) {
 
 async function sendPrice(userId) {
   const data = fsm.getData(userId);
-  const text = data.channel_subscribed ? MSG_PRICE_DISCOUNTED : MSG_PRICE;
-  await sendStep(userId, text, { keyboard: kbPrice(), videoKey: 'VIDEO_WHY_PAID' });
+  const subscribed = !!data.channel_subscribed;
+  const text = subscribed ? MSG_PRICE_DISCOUNTED : MSG_PRICE;
+  const priceKb = subscribed ? kbPriceSubscribed() : kbPrice();
+  await sendStep(userId, text, { keyboard: priceKb, videoKey: 'VIDEO_WHY_PAID' });
   fsm.setState(userId, States.PRICE);
   sendConversion(data.client_id, config.GOAL_PRICE, userId).catch(() => {});
   scheduler.schedule(userId, 'price_reminder', config.PRICE_REMINDER_TIMEOUT, States.PRICE);
@@ -161,14 +163,29 @@ async function requestPhone(userId, leadType) {
 async function finalizeLead(userId) {
   const data = fsm.getData(userId);
   const leadTypeKey = data.pending_lead_type || 'short';
-  const msg = leadTypeKey === 'requisites' ? MSG_LEAD_REQUISITES : MSG_LEAD_SHORT;
-  const leadTypeLabel = leadTypeKey === 'requisites' ? 'Готов оплатить' : 'Запрос связи';
 
-  await maxApi.sendMessage(userId, {
-    text: msg,
-    format: 'html',
-    attachments: [kbChannelLink()],
-  });
+  let msg, leadTypeLabel;
+  if (leadTypeKey === 'subscribed') {
+    msg = MSG_LEAD_SUBSCRIBED;
+    leadTypeLabel = 'Подписчик (бесплатный аудит)';
+  } else if (leadTypeKey === 'requisites') {
+    msg = MSG_LEAD_REQUISITES;
+    leadTypeLabel = 'Готов оплатить';
+  } else {
+    msg = MSG_LEAD_SHORT;
+    leadTypeLabel = 'Запрос связи';
+  }
+
+  if (leadTypeKey === 'subscribed') {
+    // Подписчик — без кнопки канала (уже подписан)
+    await maxApi.sendMessage(userId, { text: msg, format: 'html' });
+  } else {
+    await maxApi.sendMessage(userId, {
+      text: msg,
+      format: 'html',
+      attachments: [kbChannelLink()],
+    });
+  }
   fsm.setState(userId, States.FINISHED);
 
   // Метрика: специфичная цель
@@ -218,8 +235,19 @@ async function handleBotStarted(update) {
   scheduler.cancel(userId);
   fsm.clear(userId);
 
+  // Извлекаем ClientId из deep-link payload (если есть)
+  // Формат ссылки: https://max.ru/<botName>?start=cid_XXXXXXXX
+  let clientId = null;
+  const payload = update.payload;
+  if (payload && payload.startsWith('cid_')) {
+    clientId = payload.slice(4);
+    logger.info(`ClientId из deep-link получен: ${clientId} (max_user_id=${userId})`);
+  } else if (payload) {
+    logger.debug(`Deep-link payload без cid_: ${payload}`);
+  }
+
   fsm.updateData(userId, {
-    client_id: null,
+    client_id: clientId,
     max_user_id: userId,
     username: update.user.username || '',
     full_name: [update.user.first_name, update.user.last_name].filter(Boolean).join(' '),
@@ -244,7 +272,7 @@ async function handleBotStarted(update) {
   fsm.setState(userId, States.GREETING);
   await sendStep(userId, MSG_GREETING, { videoKey: 'VIDEO_GREETING' });
 
-  sendConversion(null, config.GOAL_BOT_STARTED, userId).catch(() => {});
+  sendConversion(clientId, config.GOAL_BOT_STARTED, userId).catch(() => {});
 
   // Таймаут 5 сек → автоматически отправляем Вопрос 1
   setTimeout(async () => {
@@ -373,18 +401,26 @@ async function handleCallback(update) {
         const isMember = result.members && result.members.length > 0;
         if (isMember) {
           fsm.updateData(userId, { channel_subscribed: true });
-          await maxApi.answerCallbackNotification(callbackId, 'Подписка подтверждена — цена со скидкой 8 000 ₽.').catch(() => {});
+          await maxApi.answerCallbackNotification(callbackId, 'Подписка подтверждена — аудит бесплатно!').catch(() => {});
           const data = fsm.getData(userId);
           sendConversion(data.client_id, config.GOAL_SUB, userId).catch(() => {});
-          // Обновить сообщение со скидкой
-          if (messageId) {
-            try {
-              await maxApi.editMessage(messageId, {
-                text: MSG_PRICE_DISCOUNTED,
-                format: 'html',
-                attachments: [kbPrice()],
-              });
-            } catch { /* ignore */ }
+
+          if (data.price_accepted) {
+            // Пользователь уже нажал "Да, по счёту" — перенаправляем на телефон
+            scheduler.cancel(userId);
+            if (messageId) await removeButtons(messageId);
+            await requestPhone(userId, 'subscribed');
+          } else {
+            // Обновить сообщение — бесплатно + кнопка "Готов к аудиту"
+            if (messageId) {
+              try {
+                await maxApi.editMessage(messageId, {
+                  text: MSG_PRICE_DISCOUNTED,
+                  format: 'html',
+                  attachments: [kbPriceSubscribed()],
+                });
+              } catch { /* ignore */ }
+            }
           }
         } else {
           await maxApi.answerCallbackNotification(callbackId, 'Подписку не вижу. Подпишитесь на канал и нажмите «Проверить подписку».').catch(() => {});
@@ -396,9 +432,33 @@ async function handleCallback(update) {
       break;
     }
 
+    // ── Подписчик готов к бесплатному аудиту ──
+    case CB_SUB_READY: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      await requestPhone(userId, 'subscribed');
+      break;
+    }
+
     // ── Цена: да, по счёту ──
     case CB_PRICE_YES:
     case CB_PRICE_REM_PAY: {
+      scheduler.cancel(userId);
+      if (messageId) await removeButtons(messageId);
+      const data = fsm.getData(userId);
+      if (data.channel_subscribed) {
+        // Уже подписан → сразу к телефону → бесплатный аудит
+        await requestPhone(userId, 'subscribed');
+      } else {
+        // Не подписан → напомнить про бесплатный вариант
+        fsm.updateData(userId, { price_accepted: true });
+        await sendStep(userId, MSG_PRICE_SUB_REMINDER, { keyboard: kbPriceSubReminder() });
+      }
+      break;
+    }
+
+    // ── Продолжить оплату без подписки ──
+    case CB_PRICE_CONTINUE: {
       scheduler.cancel(userId);
       if (messageId) await removeButtons(messageId);
       await requestPhone(userId, 'requisites');
