@@ -64,6 +64,19 @@ async function removeButtons(messageId) {
   }
 }
 
+function ensureUserData(userId, user) {
+  if (!user) return;
+  const data = fsm.getData(userId);
+  if (!data.max_user_id) {
+    const enriched = {
+      max_user_id: userId,
+      username: user.username || '',
+      full_name: [user.first_name, user.last_name].filter(Boolean).join(' '),
+    };
+    fsm.updateData(userId, enriched);
+  }
+}
+
 // ── Обработчики напоминаний ──────────────────────────────
 
 async function hdlGoalReminder(userId) {
@@ -218,6 +231,7 @@ async function notifyAdmin(data, leadType) {
     phone: data.phone || '',
     leadType,
     channelSubscribed: !!data.channel_subscribed,
+    dataIncomplete: !data.max_user_id,
   });
   try {
     await maxApi.sendChatMessage(Number(config.ADMIN_CHAT_ID), { text, format: 'html' });
@@ -301,6 +315,9 @@ async function handleCallback(update) {
   const messageId = update.message?.body?.mid;
 
   if (!userId || !payload) return;
+
+  // Re-populate user identity if lost after restart
+  ensureUserData(userId, cb.user);
 
   // Ответить на callback (убрать "загрузку")
   await maxApi.answerCallback(callbackId).catch(() => {});
@@ -507,6 +524,9 @@ async function handleMessage(update) {
 
   const userId = msg.sender?.user_id;
   if (!userId || msg.sender?.is_bot) return;
+
+  // Re-populate user identity if lost after restart
+  ensureUserData(userId, msg.sender);
 
   const text = msg.body?.text || '';
   const attachments = msg.body?.attachments || [];

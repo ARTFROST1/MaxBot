@@ -345,6 +345,7 @@ export function adminNotification({
   phone,
   leadType,
   channelSubscribed,
+  dataIncomplete = false,
 }) {
   const nameDisplay = fullName || 'Без имени';
   const userLink = username
@@ -357,6 +358,7 @@ export function adminNotification({
     ? `🆔 ycid: <code>${ycid}</code>`
     : '🆔 ycid: <i>не передан</i>';
   const subMark = channelSubscribed ? '✅' : '❌';
+  const warning = dataIncomplete ? '\n\n⚠️ <i>Часть данных утрачена (перезапуск бота)</i>' : '';
   return (
     `🔔 <b>Новая заявка из MaxBot!</b>\n` +
     `\n` +
@@ -370,6 +372,6 @@ export function adminNotification({
     `🔑 Ключевая цель: <b>${keyGoal}</b>\n` +
     `📢 Подписан на канал: <b>${subMark}</b>\n` +
     `\n` +
-    `📝 Тип заявки: <b>${leadType}</b>`
+    `📝 Тип заявки: <b>${leadType}</b>${warning}`
   );
 }
