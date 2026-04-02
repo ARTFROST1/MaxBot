@@ -84,7 +84,7 @@ export function kbPriceSubReminder() {
   return kb([
     [linkBtn('📢 Подписаться на канал', config.MAX_CHANNEL_LINK || 'https://max.ru')],
     [cbBtn('🔍 Проверить подписку', CB_SUB_CHECK)],
-    [cbBtn('💳 Продолжить оплату (5 000 ₽)', CB_PRICE_CONTINUE)],
+    [cbBtn('➡️ Продолжить без подписки', CB_PRICE_CONTINUE)],
   ]);
 }
 
