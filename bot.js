@@ -28,7 +28,7 @@ import {
   adminNotification,
 } from './messages.js';
 
-let cachedResolvedChannelId = null;
+let cachedResolvedChannel = null;
 
 function normalizeMaxLink(link) {
   if (!link) return '';
@@ -40,37 +40,92 @@ function normalizeMaxLink(link) {
 }
 
 async function resolveChannelIdForSubscriptionCheck() {
-  if (cachedResolvedChannelId) return cachedResolvedChannelId;
+  if (cachedResolvedChannel) return cachedResolvedChannel;
 
   const explicitId = String(config.MAX_CHANNEL_ID || '').trim();
-  if (explicitId) {
-    cachedResolvedChannelId = explicitId;
-    return explicitId;
+  const explicitLink = normalizeMaxLink(config.MAX_CHANNEL_LINK);
+
+  const saveResolved = ({ id, link }, reason) => {
+    const normalized = {
+      id: String(id || '').trim(),
+      link: normalizeMaxLink(link || ''),
+    };
+    cachedResolvedChannel = normalized;
+    if (!config.MAX_CHANNEL_ID && normalized.id) config.MAX_CHANNEL_ID = normalized.id;
+    if (!config.MAX_CHANNEL_LINK && normalized.link) config.MAX_CHANNEL_LINK = normalized.link;
+    logger.info(
+      {
+        channelId: normalized.id || null,
+        channelLink: normalized.link || null,
+        reason,
+      },
+      'Канал для проверки подписки определён',
+    );
+    return normalized;
+  };
+
+  if (explicitId && explicitLink) {
+    return saveResolved({ id: explicitId, link: explicitLink }, 'env:id+link');
   }
 
-  const channelLink = normalizeMaxLink(config.MAX_CHANNEL_LINK);
-  if (!channelLink) return null;
-
   let marker = null;
+  const allChats = [];
   for (let i = 0; i < 20; i += 1) {
     const page = await maxApi.getChats(marker, 100);
     const chats = Array.isArray(page?.chats) ? page.chats : [];
-
-    const found = chats.find((chat) => normalizeMaxLink(chat?.link) === channelLink);
-    if (found) {
-      const foundId = String(found.chat_id ?? found.id ?? '').trim();
-      if (foundId) {
-        cachedResolvedChannelId = foundId;
-        logger.info({ channelId: foundId, channelLink }, 'MAX_CHANNEL_ID автоопределён по MAX_CHANNEL_LINK');
-        return foundId;
-      }
-    }
+    allChats.push(...chats);
 
     if (page?.marker == null || page.marker === marker) break;
     marker = page.marker;
   }
 
-  logger.warn({ channelLink }, 'Не удалось автоопределить chat_id по MAX_CHANNEL_LINK');
+  if (explicitLink) {
+    const foundByLink = allChats.find((chat) => normalizeMaxLink(chat?.link) === explicitLink);
+    if (foundByLink) {
+      return saveResolved(
+        {
+          id: foundByLink.chat_id ?? foundByLink.id,
+          link: foundByLink.link || explicitLink,
+        },
+        'api:link-match',
+      );
+    }
+    logger.warn({ channelLink: explicitLink }, 'MAX_CHANNEL_LINK не найден среди /chats');
+  }
+
+  if (explicitId) {
+    const foundById = allChats.find((chat) => String(chat.chat_id ?? chat.id) === explicitId);
+    if (foundById) {
+      return saveResolved(
+        {
+          id: explicitId,
+          link: foundById.link || explicitLink,
+        },
+        'api:id-match',
+      );
+    }
+    return saveResolved({ id: explicitId, link: explicitLink }, 'env:id-only');
+  }
+
+  const channels = allChats.filter((chat) => chat?.type === 'channel' && chat?.status === 'active');
+  if (channels.length === 1) {
+    return saveResolved(
+      {
+        id: channels[0].chat_id ?? channels[0].id,
+        link: channels[0].link || '',
+      },
+      'api:single-active-channel',
+    );
+  }
+
+  logger.warn(
+    {
+      channelsFound: channels.length,
+      hasEnvChannelId: Boolean(explicitId),
+      hasEnvChannelLink: Boolean(explicitLink),
+    },
+    'Не удалось определить канал для проверки подписки',
+  );
   return null;
 }
 
@@ -239,11 +294,11 @@ async function finalizeLead(userId) {
     // Подписчик — без кнопки канала (уже подписан)
     await maxApi.sendMessage(userId, { text: msg, format: 'html' });
   } else {
-    await maxApi.sendMessage(userId, {
-      text: msg,
-      format: 'html',
-      attachments: [kbChannelLink()],
-    });
+    const channelKb = kbChannelLink();
+    const hasButtons = Array.isArray(channelKb?.payload?.buttons) && channelKb.payload.buttons.length > 0;
+    const body = { text: msg, format: 'html' };
+    if (hasButtons) body.attachments = [channelKb];
+    await maxApi.sendMessage(userId, body);
   }
   fsm.setState(userId, States.FINISHED);
 
@@ -455,14 +510,14 @@ async function handleCallback(update) {
 
     // ── Проверка подписки ──
     case CB_SUB_CHECK: {
-      let channelId = null;
+      let resolvedChannel = null;
       try {
-        channelId = await resolveChannelIdForSubscriptionCheck();
+        resolvedChannel = await resolveChannelIdForSubscriptionCheck();
       } catch (e) {
         logger.warn({ err: e }, 'Ошибка автоопределения канала для проверки подписки');
       }
 
-      if (!channelId) {
+      if (!resolvedChannel?.id) {
         await maxApi.answerCallbackNotification(
           callbackId,
           'Не настроен канал для проверки подписки. Укажите MAX_CHANNEL_ID или MAX_CHANNEL_LINK и перезапустите бота.',
@@ -470,7 +525,7 @@ async function handleCallback(update) {
         break;
       }
       try {
-        const result = await maxApi.getMembers(channelId, [userId]);
+        const result = await maxApi.getMembers(resolvedChannel.id, [userId]);
         const isMember = result.members && result.members.length > 0;
         if (isMember) {
           fsm.updateData(userId, { channel_subscribed: true });
@@ -730,16 +785,18 @@ export async function startPolling() {
       'Конфиг проверки подписки',
     );
 
-    if (!config.MAX_CHANNEL_ID && config.MAX_CHANNEL_LINK) {
-      resolveChannelIdForSubscriptionCheck()
-        .then((channelId) => {
-          if (channelId) {
-            logger.info({ channelId }, 'Канал для проверки подписки готов');
-          }
-        })
-        .catch((e) => {
-          logger.warn({ err: e }, 'Не удалось подготовить канал для проверки подписки на старте');
-        });
+    try {
+      const resolved = await resolveChannelIdForSubscriptionCheck();
+      logger.info(
+        {
+          hasResolvedChannelId: Boolean(resolved?.id),
+          resolvedChannelId: resolved?.id || null,
+          resolvedChannelLink: resolved?.link || null,
+        },
+        'Результат подготовки канала для проверки подписки',
+      );
+    } catch (e) {
+      logger.warn({ err: e }, 'Не удалось подготовить канал для проверки подписки на старте');
     }
   } catch (e) {
     logger.error({ err: e }, 'Не удалось получить информацию о боте. Проверьте MAX_BOT_TOKEN.');

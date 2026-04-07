@@ -43,6 +43,12 @@ function linkBtn(text, url) {
   return { type: 'link', text, url };
 }
 
+function channelLinkRow() {
+  const url = (config.MAX_CHANNEL_LINK || '').trim();
+  if (!url) return null;
+  return [linkBtn('📢 Подписаться на канал', url)];
+}
+
 // ============================================================
 // Клавиатуры
 // ============================================================
@@ -81,19 +87,21 @@ export const MSG_PRICE_SUB_REMINDER =
   `и аудит будет бесплатным!`;
 
 export function kbPriceSubReminder() {
-  return kb([
-    [linkBtn('📢 Подписаться на канал', config.MAX_CHANNEL_LINK || 'https://max.ru')],
-    [cbBtn('🔍 Проверить подписку', CB_SUB_CHECK)],
-    [cbBtn('➡️ Продолжить без подписки', CB_PRICE_CONTINUE)],
-  ]);
+  const buttons = [];
+  const linkRow = channelLinkRow();
+  if (linkRow) buttons.push(linkRow);
+  buttons.push([cbBtn('🔍 Проверить подписку', CB_SUB_CHECK)]);
+  buttons.push([cbBtn('➡️ Продолжить без подписки', CB_PRICE_CONTINUE)]);
+  return kb(buttons);
 }
 
 export function kbPrice() {
-  return kb([
-    [linkBtn('📢 Подписаться на канал', config.MAX_CHANNEL_LINK || 'https://max.ru')],
-    [cbBtn('🔍 Проверить подписку', CB_SUB_CHECK)],
-    [cbBtn('✅ Да, по счёту', CB_PRICE_YES), cbBtn('💬 Другой способ', CB_PRICE_NO)],
-  ]);
+  const buttons = [];
+  const linkRow = channelLinkRow();
+  if (linkRow) buttons.push(linkRow);
+  buttons.push([cbBtn('🔍 Проверить подписку', CB_SUB_CHECK)]);
+  buttons.push([cbBtn('✅ Да, по счёту', CB_PRICE_YES), cbBtn('💬 Другой способ', CB_PRICE_NO)]);
+  return kb(buttons);
 }
 
 export function kbPriceSubscribed() {
@@ -118,9 +126,9 @@ export const KB_PHONE_REQUEST = kb([
 ]);
 
 export function kbChannelLink() {
-  return kb([
-    [linkBtn('📢 Подписаться на канал', config.MAX_CHANNEL_LINK || 'https://max.ru')],
-  ]);
+  const linkRow = channelLinkRow();
+  if (!linkRow) return kb([]);
+  return kb([linkRow]);
 }
 
 // ============================================================
@@ -320,7 +328,7 @@ export const MSG_FINAL_REMINDER =
   `Но, как любой уважающий себя маркетолог, я должен сделать 3 вещи:\n` +
   `\n` +
   `1️⃣  Предложить подписаться на канал:\n` +
-  `     👉 ${config.MAX_CHANNEL_LINK || 'канал'}\n` +
+  `     👉 ${config.MAX_CHANNEL_LINK || 'ссылка временно недоступна'}\n` +
   `\n` +
   `2️⃣  Напомнить контакты для прямой связи:\n` +
   `     📞 <b>${config.CONTACT_PHONE}</b>\n` +
