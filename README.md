@@ -86,3 +86,6 @@ sudo journalctl -u maxbot -f
 | `MAX_CHANNEL_ID` | ID канала для проверки подписки | |
 | `CONTACT_PHONE` | Телефон для контакта | |
 | `CONTACT_TG` | Telegram/Max контакт | |
+
+Если `MAX_CHANNEL_ID` не задан, бот попробует автоматически определить `chat_id`
+по `MAX_CHANNEL_LINK` через метод `/chats` (бот должен быть участником/админом канала).

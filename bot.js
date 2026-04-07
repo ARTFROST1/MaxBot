@@ -28,6 +28,52 @@ import {
   adminNotification,
 } from './messages.js';
 
+let cachedResolvedChannelId = null;
+
+function normalizeMaxLink(link) {
+  if (!link) return '';
+  return String(link)
+    .trim()
+    .replace(/^max:\/\//i, 'https://')
+    .replace(/^https?:\/\/web\.max\.ru/i, 'https://max.ru')
+    .replace(/\/$/, '');
+}
+
+async function resolveChannelIdForSubscriptionCheck() {
+  if (cachedResolvedChannelId) return cachedResolvedChannelId;
+
+  const explicitId = String(config.MAX_CHANNEL_ID || '').trim();
+  if (explicitId) {
+    cachedResolvedChannelId = explicitId;
+    return explicitId;
+  }
+
+  const channelLink = normalizeMaxLink(config.MAX_CHANNEL_LINK);
+  if (!channelLink) return null;
+
+  let marker = null;
+  for (let i = 0; i < 20; i += 1) {
+    const page = await maxApi.getChats(marker, 100);
+    const chats = Array.isArray(page?.chats) ? page.chats : [];
+
+    const found = chats.find((chat) => normalizeMaxLink(chat?.link) === channelLink);
+    if (found) {
+      const foundId = String(found.chat_id ?? found.id ?? '').trim();
+      if (foundId) {
+        cachedResolvedChannelId = foundId;
+        logger.info({ channelId: foundId, channelLink }, 'MAX_CHANNEL_ID автоопределён по MAX_CHANNEL_LINK');
+        return foundId;
+      }
+    }
+
+    if (page?.marker == null || page.marker === marker) break;
+    marker = page.marker;
+  }
+
+  logger.warn({ channelLink }, 'Не удалось автоопределить chat_id по MAX_CHANNEL_LINK');
+  return null;
+}
+
 // ── Вспомогательная отправка шага ─────────────────────────
 async function sendStep(userId, text, { keyboard = null, videoKey = '' } = {}) {
   // Typing action (аналог bot.send_chat_action в Python)
@@ -409,12 +455,22 @@ async function handleCallback(update) {
 
     // ── Проверка подписки ──
     case CB_SUB_CHECK: {
-      if (!config.MAX_CHANNEL_ID) {
-        await maxApi.answerCallbackNotification(callbackId, 'Не настроен канал для проверки подписки.').catch(() => {});
+      let channelId = null;
+      try {
+        channelId = await resolveChannelIdForSubscriptionCheck();
+      } catch (e) {
+        logger.warn({ err: e }, 'Ошибка автоопределения канала для проверки подписки');
+      }
+
+      if (!channelId) {
+        await maxApi.answerCallbackNotification(
+          callbackId,
+          'Не настроен канал для проверки подписки. Укажите MAX_CHANNEL_ID или MAX_CHANNEL_LINK и перезапустите бота.',
+        ).catch(() => {});
         break;
       }
       try {
-        const result = await maxApi.getMembers(Number(config.MAX_CHANNEL_ID), [userId]);
+        const result = await maxApi.getMembers(channelId, [userId]);
         const isMember = result.members && result.members.length > 0;
         if (isMember) {
           fsm.updateData(userId, { channel_subscribed: true });
@@ -666,6 +722,25 @@ export async function startPolling() {
   try {
     const me = await maxApi.getMe();
     logger.info({ botId: me.user_id, name: me.first_name }, '🚀 MaxBot Auditbot запущен');
+    logger.info(
+      {
+        hasChannelId: Boolean(config.MAX_CHANNEL_ID),
+        channelLink: config.MAX_CHANNEL_LINK || null,
+      },
+      'Конфиг проверки подписки',
+    );
+
+    if (!config.MAX_CHANNEL_ID && config.MAX_CHANNEL_LINK) {
+      resolveChannelIdForSubscriptionCheck()
+        .then((channelId) => {
+          if (channelId) {
+            logger.info({ channelId }, 'Канал для проверки подписки готов');
+          }
+        })
+        .catch((e) => {
+          logger.warn({ err: e }, 'Не удалось подготовить канал для проверки подписки на старте');
+        });
+    }
   } catch (e) {
     logger.error({ err: e }, 'Не удалось получить информацию о боте. Проверьте MAX_BOT_TOKEN.');
     process.exit(1);

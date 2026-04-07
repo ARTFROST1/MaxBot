@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, '.env') });
 
-const env = (key, fallback = '') => process.env[key] ?? fallback;
+const env = (key, fallback = '') => {
+  const value = process.env[key];
+  if (value == null) return fallback;
+  return typeof value === 'string' ? value.trim() : value;
+};
 const envInt = (key, fallback) => parseInt(env(key, String(fallback)), 10);
 const envRequired = (key) => {
   const v = process.env[key];

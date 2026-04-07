@@ -93,6 +93,13 @@ export const maxApi = {
     return data;
   },
 
+  async getChats(marker = null, count = 100) {
+    const params = { count };
+    if (marker != null) params.marker = marker;
+    const { data } = await client.get('/chats', { params });
+    return data;
+  },
+
   // === Uploads ===
   async getUploadUrl(type = 'video') {
     const { data } = await client.post('/uploads', null, {
