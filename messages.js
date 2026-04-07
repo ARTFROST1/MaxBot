@@ -106,7 +106,7 @@ export function kbPrice() {
 
 export function kbPriceSubscribed() {
   return kb([
-    [cbBtn('✅ Я подписался. Готов к аудиту', CB_SUB_READY)],
+    [cbBtn('✅ Готов к аудиту', CB_SUB_READY)],
   ]);
 }
 

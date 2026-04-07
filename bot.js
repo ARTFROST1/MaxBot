@@ -526,7 +526,8 @@ async function handleCallback(update) {
       }
       try {
         const result = await maxApi.getMembers(resolvedChannel.id, [userId]);
-        const isMember = result.members && result.members.length > 0;
+        const members = Array.isArray(result?.members) ? result.members : [];
+        const isMember = members.some((member) => String(member?.user_id) === String(userId));
         if (isMember) {
           fsm.updateData(userId, { channel_subscribed: true });
           await maxApi.answerCallbackNotification(callbackId, 'Подписка подтверждена — аудит бесплатно!').catch(() => {});

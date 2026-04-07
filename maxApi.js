@@ -82,8 +82,27 @@ export const maxApi = {
   // === Members ===
   async getMembers(chatId, userIds = null) {
     const params = {};
-    if (userIds) params.user_ids = userIds;
-    const { data } = await client.get(`/chats/${chatId}/members`, { params });
+    if (Array.isArray(userIds) && userIds.length > 0) {
+      params.user_ids = userIds.map((id) => String(id));
+    } else if (userIds != null) {
+      params.user_ids = [String(userIds)];
+    }
+    const { data } = await client.get(`/chats/${chatId}/members`, {
+      params,
+      paramsSerializer: (p) => {
+        const searchParams = new URLSearchParams();
+        for (const [key, value] of Object.entries(p || {})) {
+          if (Array.isArray(value)) {
+            for (const item of value) {
+              if (item != null) searchParams.append(key, String(item));
+            }
+          } else if (value != null) {
+            searchParams.append(key, String(value));
+          }
+        }
+        return searchParams.toString();
+      },
+    });
     return data;
   },
 
